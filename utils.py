@@ -110,3 +110,6 @@ def df_to_text(df: pd.DataFrame, max_rows: int = 50) -> str:
 # ── Environment ───────────────────────────────────────────────────────────────
 def get_openai_key() -> str | None:
     return os.environ.get("OPENAI_API_KEY") or os.environ.get("openai_api_key")
+
+def get_groq_key() -> str | None:
+    return os.environ.get("GROQ_API_KEY") or os.environ.get("groq_api_key")
