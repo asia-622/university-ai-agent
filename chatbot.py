@@ -11,15 +11,15 @@ from typing import Generator
 from memory import ConversationMemory
 from rag_engine import RAGEngine
 from tools import TOOL_SCHEMAS, call_tool
-from utils import get_openai_key, truncate
+from utils import get_groq_key, truncate
 
 logger = logging.getLogger("university_agent.chatbot")
 
 try:
-    from openai import OpenAI
-    OPENAI_OK = True
+    from groq import Groq
+    GROQ_OK = True
 except ImportError:
-    OPENAI_OK = False
+    GROQ_OK = False
 
 SYSTEM_PROMPT = """You are a University AI Analytics Agent — an expert data analyst and academic advisor with access to a university dataset.
 
@@ -40,8 +40,8 @@ Guidelines:
 
 class UniversityAgent:
     def __init__(self, api_key: str | None = None):
-        key = api_key or get_openai_key()
-        self.client = OpenAI(api_key=key) if (key and OPENAI_OK) else None
+        key = api_key or get_groq_key()
+        self.client = Groq(api_key=key) if (key and GROQ_OK) else None
         self.memory = ConversationMemory(max_messages=20)
         self.rag: RAGEngine | None = None
         self.meta: dict | None = None
@@ -92,7 +92,7 @@ class UniversityAgent:
 
         for round_n in range(max_rounds):
             resp = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="llama-3.3-70b-versatile",
                 messages=messages,
                 tools=TOOL_SCHEMAS if self.meta else None,
                 tool_choice="auto" if self.meta else None,
@@ -124,7 +124,7 @@ class UniversityAgent:
         # Fallback: ask model to summarise with available context
         messages.append({"role": "user", "content": "Please provide your best answer based on the tool results above."})
         final = self.client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="llama-3.3-70b-versatile",
             messages=messages,
             temperature=0.3,
             max_tokens=1200,
@@ -134,7 +134,7 @@ class UniversityAgent:
     # ── Fallback when no OpenAI key ───────────────────────────────────────────
     def _no_llm_response(self, query: str) -> str:
         if self.meta is None:
-            return "⚠️ Please upload a dataset first, then enter your OpenAI API key in the sidebar."
+            return "⚠️ Please upload a dataset first, then enter your Groq API key in the sidebar."
 
         q = query.lower()
 
@@ -155,10 +155,10 @@ class UniversityAgent:
             # Try RAG
             if self.rag and self.rag.is_ready:
                 ctx = self.rag.format_context(query, top_k=5)
-                return f"📊 **Relevant data from dataset:**\n\n{ctx}\n\n*(Add an OpenAI API key in the sidebar for AI-powered responses.)*"
-            return "🔑 Please add your OpenAI API key in the sidebar for intelligent responses."
+                return f"📊 **Relevant data from dataset:**\n\n{ctx}\n\n*(Add a Groq API key in the sidebar for AI-powered responses.)*"
+            return "🔑 Please add your Groq API key in the sidebar for intelligent responses."
 
-        return f"```json\n{json.dumps(r, indent=2)}\n```\n*(Add an OpenAI API key for natural language answers.)*"
+        return f"```json\n{json.dumps(r, indent=2)}\n```\n*(Add a Groq API key for natural language answers.)*"
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def reset(self) -> None:
