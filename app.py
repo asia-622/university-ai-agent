@@ -181,6 +181,15 @@ from tools import (
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Load API key from Streamlit secrets (hidden from UI)
+# ─────────────────────────────────────────────────────────────────────────────
+def _get_api_key() -> str:
+    try:
+        return st.secrets["GROQ_API_KEY"]
+    except Exception:
+        return os.environ.get("GROQ_API_KEY", "")
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Session state initialisation
 # ─────────────────────────────────────────────────────────────────────────────
 def _init_state():
@@ -190,7 +199,7 @@ def _init_state():
         "rag": None,
         "ml_model": None,
         "chat_history": [],   # list of (role, content)
-        "api_key": os.environ.get("GROQ_API_KEY", ""),
+        "api_key": _get_api_key(),
         "rag_built": False,
     }
     for k, v in defaults.items():
@@ -215,16 +224,7 @@ with st.sidebar:
         label_visibility="collapsed",
     )
 
-    st.markdown("---")
-    st.markdown("### 🔑 Groq API Key")
-    api_key_input = st.text_input(
-        "API Key", type="password",
-        value=st.session_state["api_key"],
-        placeholder="gsk_...",
-        label_visibility="collapsed",
-    )
-    if api_key_input:
-        st.session_state["api_key"] = api_key_input
+    # ── API key is loaded silently from st.secrets — no input shown ──
 
     if st.session_state["meta"]:
         meta = st.session_state["meta"]
@@ -292,8 +292,8 @@ if page == "🏠 Home":
     st.markdown("### 🚀 Getting Started")
     steps = [
         ("1", "📂 Upload & Analyze", "Upload CSV / Excel / JSON dataset"),
-        ("2", "🔑 API Key", "Enter OpenAI API key in the sidebar"),
-        ("3", "📊 Dashboard", "Explore auto-generated charts"),
+        ("2", "📊 Dashboard", "Explore auto-generated charts"),
+        ("3", "🔍 Student Search", "Search and view student profiles"),
         ("4", "🤖 AI Agent Chat", "Ask questions in natural language"),
     ]
     cols = st.columns(4)
@@ -713,7 +713,7 @@ elif page == "🤖 AI Agent Chat":
     # Agent status bar
     has_key = bool(st.session_state.get("api_key"))
     status_color = "#34d399" if has_key else "#fbbf24"
-    status_text = "🟢 Groq LLaMA + RAG + Tools Active" if has_key else "🟡 RAG+Tools only (add Groq API key for LLM)"
+    status_text = "🟢 Groq LLaMA + RAG + Tools Active" if has_key else "🟡 RAG+Tools only (add Groq API key in Streamlit secrets)"
     st.markdown(
         f"<div style='background:rgba(30,41,59,0.8);border:1px solid #334155;"
         f"border-radius:8px;padding:0.6rem 1rem;margin-bottom:1rem;"
