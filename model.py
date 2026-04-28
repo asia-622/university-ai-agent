@@ -5,7 +5,6 @@ Trains on any detected subject columns; target = Average or specified col.
 from __future__ import annotations
 
 import logging
-
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
@@ -19,12 +18,10 @@ logger = logging.getLogger("university_agent.model")
 def train_model(meta: dict, target_col: str | None = None) -> dict | None:
     """
     Train a Linear Regression model.
-
     Parameters
     ----------
     meta        preprocessed metadata dict
     target_col  column to predict (default: 'Average' if exists, else last subject col)
-
     Returns
     -------
     dict with keys: estimator, scaler, feature_cols, target_col, metrics
@@ -42,7 +39,7 @@ def train_model(meta: dict, target_col: str | None = None) -> dict | None:
         if "Average" in df.columns:
             target_col = "Average"
         elif len(subject_cols) >= 2:
-            target_col = subject_cols[-1]   # predict last subject
+            target_col = subject_cols[-1]
         else:
             logger.warning("Not enough columns to train a regression model.")
             return None
@@ -73,6 +70,7 @@ def train_model(meta: dict, target_col: str | None = None) -> dict | None:
 
     lr = LinearRegression()
     lr.fit(X_train_s, y_train)
+
     y_pred = lr.predict(X_test_s)
 
     metrics = {
