@@ -24,11 +24,8 @@ except ImportError:
     FAISS_OK = False
     logger.warning("faiss-cpu not installed — RAG will use simple TF-IDF fallback")
 
-try:
-    from openai import OpenAI
-    OPENAI_OK = True
-except ImportError:
-    OPENAI_OK = False
+# Groq does not support embeddings — using TF-IDF fallback only
+OPENAI_OK = False
 
 
 # ── Chunk helpers ─────────────────────────────────────────────────────────────
@@ -88,10 +85,8 @@ class RAGEngine:
         self.index = None           # faiss index
         self._tfidf = None          # fallback
         self._tfidf_matrix = None
-        self._embed_dim: int = 1536  # ada-002
-        self.client: Optional["OpenAI"] = None
-        if api_key and OPENAI_OK:
-            self.client = OpenAI(api_key=api_key)
+        self._embed_dim: int = 1536
+        self.client = None  # Groq does not support embeddings — TF-IDF used
 
     # ── Build ─────────────────────────────────────────────────────────────────
     def build(self, chunks: list[str]) -> None:
