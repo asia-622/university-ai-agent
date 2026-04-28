@@ -190,7 +190,7 @@ def _init_state():
         "rag": None,
         "ml_model": None,
         "chat_history": [],   # list of (role, content)
-        "api_key": os.environ.get("OPENAI_API_KEY", ""),
+        "api_key": os.environ.get("GROQ_API_KEY", ""),
         "rag_built": False,
     }
     for k, v in defaults.items():
@@ -216,11 +216,11 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.markdown("### 🔑 OpenAI API Key")
+    st.markdown("### 🔑 Groq API Key")
     api_key_input = st.text_input(
         "API Key", type="password",
         value=st.session_state["api_key"],
-        placeholder="sk-...",
+        placeholder="gsk_...",
         label_visibility="collapsed",
     )
     if api_key_input:
@@ -697,8 +697,8 @@ elif page == "🤖 AI Agent Chat":
         agent: UniversityAgent = st.session_state["agent"]
         if st.session_state.get("api_key") and agent.client is None:
             try:
-                from openai import OpenAI
-                agent.client = OpenAI(api_key=st.session_state["api_key"])
+                from groq import Groq
+                agent.client = Groq(api_key=st.session_state["api_key"])
             except Exception:
                 pass
     else:
@@ -713,7 +713,7 @@ elif page == "🤖 AI Agent Chat":
     # Agent status bar
     has_key = bool(st.session_state.get("api_key"))
     status_color = "#34d399" if has_key else "#fbbf24"
-    status_text = "🟢 GPT-4 + RAG + Tools Active" if has_key else "🟡 RAG+Tools only (add API key for LLM)"
+    status_text = "🟢 Groq LLaMA + RAG + Tools Active" if has_key else "🟡 RAG+Tools only (add Groq API key for LLM)"
     st.markdown(
         f"<div style='background:rgba(30,41,59,0.8);border:1px solid #334155;"
         f"border-radius:8px;padding:0.6rem 1rem;margin-bottom:1rem;"
