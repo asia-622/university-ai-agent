@@ -588,8 +588,18 @@ elif page == "🔍 Student Search":
                 if "Grade" in row.index:
                     info_cols[i % 4].metric("Grade", str(row["Grade"]))
 
-                # Subject chart
-                scols = meta["subject_cols"]
+                # Subject chart — sirf woh subjects jinka score > 0 hai
+                dept_col = meta.get("dept_col")
+                all_scols = meta["subject_cols"]
+                if dept_col and dept_col in row.index:
+                    scols = [
+                        s for s in all_scols
+                        if s in row.index
+                        and pd.notna(row[s])
+                        and float(row[s]) > 0
+                    ]
+                else:
+                    scols = all_scols
                 if scols:
                     fig = dash.student_subject_bar(row, scols, name)
                     st.plotly_chart(fig, use_container_width=True)
