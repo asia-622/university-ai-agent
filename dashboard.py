@@ -95,31 +95,9 @@ def attendance_histogram(meta: dict) -> go.Figure:
     return fig
 
 
-# ── 4. Department avg marks bar ───────────────────────────────────────────────
-def dept_marks_bar(meta: dict) -> go.Figure:
-    df = meta["df"]
-    dept_col = meta.get("dept_col")
-    scols = meta["subject_cols"]
-    if not dept_col or not scols:
-        return _empty_fig("Need department + subject columns")
-
-    dept_avg = df.groupby(dept_col)[scols].mean().mean(axis=1).reset_index()
-    dept_avg.columns = ["Department", "Average Marks"]
-    dept_avg = dept_avg.sort_values("Average Marks", ascending=False)
-
-    fig = px.bar(
-        dept_avg, x="Department", y="Average Marks",
-        color="Average Marks", color_continuous_scale="Teal",
-        text_auto=".1f",
-        title="Average Marks by Department",
-    )
-    fig.update_traces(marker_line_width=0)
-    fig.update_layout(**_base_layout(
-        xaxis=dict(showgrid=False, color="#94a3b8"),
-        yaxis=dict(showgrid=True, gridcolor="rgba(148,163,184,0.15)", color="#94a3b8"),
-        coloraxis_showscale=False,
-    ))
-    return fig
+# ── 4. [REMOVED] dept_marks_bar — replaced by dept_subject_analysis ──────────
+# Function removed as per new feature requirement.
+# Use dept_subject_analysis() instead for department-wise subject breakdown.
 
 
 # ── 5. Grade distribution donut ───────────────────────────────────────────────
@@ -234,6 +212,266 @@ def subject_top_students(df: pd.DataFrame, subject: str, name_col: str, n: int =
         coloraxis_showscale=False,
     ))
     return fig
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ── 10. NEW: Department-wise Subject Analysis (replaces dept_marks_bar) ───────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _detect_semester_from_columns(subject_cols: list[str]) -> dict[str, list[str]]:
+    """
+    Try to group subject columns by semester from their names.
+    Patterns detected (case-insensitive):
+      - Sem1_Math / Math_Sem1 / Math_S1 / S1_Math / Semester1_Math
+      - Math1, Physics2  (trailing digit after known keywords)
+    Returns dict: { "Semester 1": [...cols], "Semester 2": [...cols], ... }
+    If no pattern found, returns { "All Subjects": [...all cols] }
+    """
+    import re
+    sem_map: dict[str, list[str]] = {}
+
+    patterns = [
+        r"sem(?:ester)?[\s_\-]?(\d+)",   # sem1, semester_2, sem-3
+        r"s(\d+)[\s_\-]",                 # S1_, S2_
+        r"[\s_\-]s(\d+)$",               # _S1 at end
+        r"[\s_\-]sem(\d+)",              # _sem2
+    ]
+
+    unmatched = []
+    for col in subject_cols:
+        col_lower = col.lower()
+        matched = False
+        for pat in patterns:
+            m = re.search(pat, col_lower)
+            if m:
+                sem_num = int(m.group(1))
+                key = f"Semester {sem_num}"
+                sem_map.setdefault(key, []).append(col)
+                matched = True
+                break
+        if not matched:
+            unmatched.append(col)
+
+    # If nothing matched at all, return single group
+    if not sem_map:
+        return {"All Subjects": subject_cols}
+
+    # Unmatched go into "Other"
+    if unmatched:
+        sem_map["Other"] = unmatched
+
+    return dict(sorted(sem_map.items()))
+
+
+def _get_dept_subjects(
+    df: pd.DataFrame,
+    dept_col: str,
+    dept_name: str,
+    subject_cols: list[str],
+    sem_col: str | None,
+) -> dict[str, list[str]]:
+    """
+    Return { semester_label: [subject_cols] } for the chosen department.
+    Priority:
+      1. Dedicated semester column in the dataframe
+      2. Semester encoded in subject column names
+      3. Fallback: all subjects under one group
+    """
+    dept_df = df[df[dept_col] == dept_name]
+
+    if sem_col and sem_col in df.columns:
+        # Dedicated semester column — group by its unique values
+        sem_groups: dict[str, list[str]] = {}
+        for sem_val in sorted(dept_df[sem_col].dropna().unique()):
+            label = f"Semester {sem_val}" if str(sem_val).isdigit() else str(sem_val)
+            # All subjects are taught every semester; filter rows, keep all scols
+            sem_groups[label] = subject_cols
+        return sem_groups if sem_groups else {"All Subjects": subject_cols}
+
+    # Try to parse semester from column names
+    return _detect_semester_from_columns(subject_cols)
+
+
+def dept_subject_bar(
+    df: pd.DataFrame,
+    dept_col: str,
+    dept_name: str,
+    subject_cols: list[str],
+    sem_col: str | None = None,
+) -> list[go.Figure]:
+    """
+    Returns a list of Bar figures — one per semester (or one for all subjects).
+    Each figure shows average marks per subject for the selected department.
+    """
+    dept_df = df[df[dept_col] == dept_name]
+    if dept_df.empty:
+        return [_empty_fig(f"No data for department: {dept_name}")]
+
+    sem_groups = _get_dept_subjects(df, dept_col, dept_name, subject_cols, sem_col)
+    figs = []
+
+    for sem_label, scols in sem_groups.items():
+        # If sem_col exists, filter rows too
+        if sem_col and sem_col in df.columns and sem_label != "All Subjects":
+            sem_val = sem_label.replace("Semester ", "").strip()
+            rows = dept_df[
+                dept_df[sem_col].astype(str).str.strip() == sem_val
+            ]
+            if rows.empty:
+                rows = dept_df  # fallback
+        else:
+            rows = dept_df
+
+        valid_scols = [c for c in scols if c in rows.columns]
+        if not valid_scols:
+            continue
+
+        avgs = rows[valid_scols].mean().reset_index()
+        avgs.columns = ["Subject", "Average Marks"]
+        avgs = avgs.dropna()
+
+        fig = px.bar(
+            avgs, x="Subject", y="Average Marks",
+            color="Subject", color_discrete_sequence=PALETTE,
+            text_auto=".1f",
+            title=f"{dept_name} — {sem_label} (Bar)",
+            labels={"Subject": "Subject", "Average Marks": "Avg Marks"},
+        )
+        fig.update_traces(marker_line_width=0, textfont_size=11)
+        fig.update_layout(**_base_layout(
+            xaxis=dict(showgrid=False, color="#94a3b8", tickangle=-20),
+            yaxis=dict(showgrid=True, gridcolor="rgba(148,163,184,0.15)", color="#94a3b8"),
+            showlegend=False,
+        ))
+        figs.append(fig)
+
+    return figs if figs else [_empty_fig(f"No subject data for {dept_name}")]
+
+
+def dept_subject_pie(
+    df: pd.DataFrame,
+    dept_col: str,
+    dept_name: str,
+    subject_cols: list[str],
+    sem_col: str | None = None,
+) -> list[go.Figure]:
+    """
+    Returns a list of Pie/Donut figures — one per semester.
+    Each pie shows the share of average marks per subject (relative performance).
+    """
+    dept_df = df[df[dept_col] == dept_name]
+    if dept_df.empty:
+        return [_empty_fig(f"No data for department: {dept_name}")]
+
+    sem_groups = _get_dept_subjects(df, dept_col, dept_name, subject_cols, sem_col)
+    figs = []
+
+    for sem_label, scols in sem_groups.items():
+        if sem_col and sem_col in df.columns and sem_label != "All Subjects":
+            sem_val = sem_label.replace("Semester ", "").strip()
+            rows = dept_df[
+                dept_df[sem_col].astype(str).str.strip() == sem_val
+            ]
+            if rows.empty:
+                rows = dept_df
+        else:
+            rows = dept_df
+
+        valid_scols = [c for c in scols if c in rows.columns]
+        if not valid_scols:
+            continue
+
+        avgs = rows[valid_scols].mean().dropna()
+        if avgs.empty:
+            continue
+
+        pie_df = avgs.reset_index()
+        pie_df.columns = ["Subject", "Average Marks"]
+
+        fig = px.pie(
+            pie_df, names="Subject", values="Average Marks",
+            color_discrete_sequence=PALETTE,
+            title=f"{dept_name} — {sem_label} (Pie)",
+            hole=0.4,
+        )
+        fig.update_traces(textposition="outside", textinfo="label+percent")
+        fig.update_layout(**_base_layout())
+        figs.append(fig)
+
+    return figs if figs else [_empty_fig(f"No subject data for {dept_name}")]
+
+
+def dept_subject_analysis(
+    df: pd.DataFrame,
+    dept_col: str,
+    dept_name: str,
+    subject_cols: list[str],
+    sem_col: str | None = None,
+) -> list[tuple[str, go.Figure, go.Figure]]:
+    """
+    Master function — returns list of (semester_label, bar_fig, pie_fig).
+    Call this from Streamlit to render both chart types per semester.
+
+    Usage in app.py / ui.py:
+        results = dept_subject_analysis(df, dept_col, selected_dept, subject_cols, sem_col)
+        for sem_label, bar_fig, pie_fig in results:
+            st.subheader(sem_label)
+            col1, col2 = st.columns(2)
+            col1.plotly_chart(bar_fig, use_container_width=True)
+            col2.plotly_chart(pie_fig, use_container_width=True)
+    """
+    dept_df = df[df[dept_col] == dept_name]
+    if dept_df.empty:
+        empty = _empty_fig(f"No data for {dept_name}")
+        return [("No Data", empty, empty)]
+
+    sem_groups = _get_dept_subjects(df, dept_col, dept_name, subject_cols, sem_col)
+    results = []
+
+    for sem_label, scols in sem_groups.items():
+        # Row filter
+        if sem_col and sem_col in df.columns and sem_label != "All Subjects":
+            sem_val = sem_label.replace("Semester ", "").strip()
+            rows = dept_df[dept_df[sem_col].astype(str).str.strip() == sem_val]
+            if rows.empty:
+                rows = dept_df
+        else:
+            rows = dept_df
+
+        valid_scols = [c for c in scols if c in rows.columns]
+        if not valid_scols:
+            continue
+
+        avgs = rows[valid_scols].mean().dropna().reset_index()
+        avgs.columns = ["Subject", "Average Marks"]
+
+        # ── Bar ──
+        bar_fig = px.bar(
+            avgs, x="Subject", y="Average Marks",
+            color="Subject", color_discrete_sequence=PALETTE,
+            text_auto=".1f",
+            title=f"{dept_name} · {sem_label} — Subject Avg (Bar)",
+        )
+        bar_fig.update_traces(marker_line_width=0, textfont_size=11)
+        bar_fig.update_layout(**_base_layout(
+            xaxis=dict(showgrid=False, color="#94a3b8", tickangle=-20),
+            yaxis=dict(showgrid=True, gridcolor="rgba(148,163,184,0.15)", color="#94a3b8"),
+            showlegend=False,
+        ))
+
+        # ── Pie ──
+        pie_fig = px.pie(
+            avgs, names="Subject", values="Average Marks",
+            color_discrete_sequence=PALETTE,
+            title=f"{dept_name} · {sem_label} — Subject Share (Pie)",
+            hole=0.4,
+        )
+        pie_fig.update_traces(textposition="outside", textinfo="label+percent")
+        pie_fig.update_layout(**_base_layout())
+
+        results.append((sem_label, bar_fig, pie_fig))
+
+    return results if results else [("No Data", _empty_fig("No subjects found"), _empty_fig("No subjects found"))]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
