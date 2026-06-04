@@ -170,7 +170,7 @@ hr { border-color: var(--border) !important; }
 # Module imports
 # ─────────────────────────────────────────────────────────────────────────────
 from file_handler import load_file
-from data_preprocessing import preprocess, get_student_row
+from data_preprocessing import preprocess, get_student_row, get_student_subjects
 from rag_engine import RAGEngine, build_chunks
 from chatbot import UniversityAgent
 from model import train_model, predict_batch
@@ -223,8 +223,6 @@ with st.sidebar:
          "⚖️ Comparison", "🤖 AI Agent Chat"],
         label_visibility="collapsed",
     )
-
-    # ── API key is loaded silently from st.secrets — no input shown ──
 
     if st.session_state["meta"]:
         meta = st.session_state["meta"]
@@ -386,6 +384,15 @@ elif page == "📂 Upload & Analyze":
                 for k, v in cols_info.items():
                     color = "#34d399" if "Not detected" not in str(v) and "None" not in str(v) else "#f87171"
                     st.markdown(f"**{k}:** <span style='color:{color}'>{v}</span>", unsafe_allow_html=True)
+
+            # Dept → Subject mapping preview
+            dept_subject_map = meta.get("dept_subject_map", {})
+            if dept_subject_map:
+                with st.expander("🗂️ Department → Subjects Mapping", expanded=False):
+                    for dept, subjects in dept_subject_map.items():
+                        st.markdown(f"**{dept}** ({len(subjects)} subjects): "
+                                    f"<span style='color:#94a3b8'>{', '.join(subjects)}</span>",
+                                    unsafe_allow_html=True)
 
             # Data preview
             st.markdown("### 👀 Data Preview (first 20 rows)")
@@ -588,20 +595,16 @@ elif page == "🔍 Student Search":
                 if "Grade" in row.index:
                     info_cols[i % 4].metric("Grade", str(row["Grade"]))
 
-                # Subject chart — sirf woh subjects jinka score > 0 hai
-                dept_col = meta.get("dept_col")
-                all_scols = meta["subject_cols"]
-                if dept_col and dept_col in row.index:
-                    scols = [
-                        s for s in all_scols
-                        if s in row.index
-                        and pd.notna(row[s])
-                        and float(row[s]) > 0
-                    ]
-                else:
-                    scols = all_scols
-                if scols:
-                    fig = dash.student_subject_bar(row, scols, name)
+                # ── Subject chart — SIRF is student ke department ke subjects ──
+                student_scols = get_student_subjects(meta, row)
+                if student_scols:
+                    dept_name = str(row.get(meta.get("dept_col"), "")) if meta.get("dept_col") else ""
+                    st.markdown(
+                        f"<span style='color:#94a3b8;font-size:0.8rem'>"
+                        f"📚 Showing {len(student_scols)} subjects for {dept_name} department</span>",
+                        unsafe_allow_html=True,
+                    )
+                    fig = dash.student_subject_bar(row, student_scols, name)
                     st.plotly_chart(fig, use_container_width=True)
 
                 # Full record
@@ -673,16 +676,20 @@ elif page == "⚖️ Comparison":
         else:
             comp_df = pd.DataFrame(rows).reset_index(drop=True)
 
+            # Use only subjects relevant to the first student's dept for comparison
+            first_row = rows[0]
+            compare_scols = get_student_subjects(meta, first_row)
+
             # Bar chart
-            st.plotly_chart(dash.comparison_bar(comp_df, scols), use_container_width=True)
+            st.plotly_chart(dash.comparison_bar(comp_df, compare_scols), use_container_width=True)
 
             # Radar chart (need ≥3 subjects)
-            if len(scols) >= 3:
-                st.plotly_chart(dash.comparison_radar(comp_df, scols), use_container_width=True)
+            if len(compare_scols) >= 3:
+                st.plotly_chart(dash.comparison_radar(comp_df, compare_scols), use_container_width=True)
 
             # Summary table
             st.markdown("### 📋 Comparison Table")
-            display_cols = ["__name__"] + scols
+            display_cols = ["__name__"] + compare_scols
             if "Average" in comp_df.columns: display_cols.append("Average")
             if meta.get("attend_col") and meta["attend_col"] in comp_df.columns:
                 display_cols.append(meta["attend_col"])
