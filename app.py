@@ -190,6 +190,92 @@ def _get_api_key() -> str:
         return os.environ.get("GROQ_API_KEY", "")
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ✅ CACHED CHART BUILDERS
+# Har function sirf tab re-run hoga jab df ya columns badlenge.
+# Streamlit har page-visit par inhe dobara compute NAHI karega.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@st.cache_data(show_spinner=False)
+def _cached_marks_bar(df: pd.DataFrame, subject_cols: tuple) -> object:
+    return dash.marks_bar_chart({"df": df, "subject_cols": list(subject_cols)})
+
+@st.cache_data(show_spinner=False)
+def _cached_dept_pie(df: pd.DataFrame, dept_col: str) -> object:
+    return dash.department_pie({"df": df, "dept_col": dept_col})
+
+@st.cache_data(show_spinner=False)
+def _cached_attendance_hist(df: pd.DataFrame, attend_col: str) -> object:
+    return dash.attendance_histogram({"df": df, "attend_col": attend_col})
+
+@st.cache_data(show_spinner=False)
+def _cached_grade_dist(df: pd.DataFrame) -> object:
+    return dash.grade_distribution({"df": df})
+
+@st.cache_data(show_spinner=False)
+def _cached_subject_top(df: pd.DataFrame, subject: str, name_col: str) -> object:
+    return dash.subject_top_students(df, subject, name_col, n=10)
+
+@st.cache_data(show_spinner=False)
+def _cached_box_plot(df: pd.DataFrame, subject_cols: tuple) -> object:
+    import plotly.express as px
+    scols = list(subject_cols)
+    fig = px.box(
+        df[scols].melt(var_name="Subject", value_name="Score"),
+        x="Subject", y="Score",
+        color="Subject",
+        title="Score Distribution (Box Plot)",
+        color_discrete_sequence=px.colors.qualitative.Bold,
+    )
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="IBM Plex Sans", color="#e2e8f0"),
+        margin=dict(l=30, r=30, t=50, b=30),
+        showlegend=False,
+        xaxis=dict(color="#94a3b8"), yaxis=dict(color="#94a3b8"),
+    )
+    return fig
+
+@st.cache_data(show_spinner=False)
+def _cached_student_bar(row_dict: dict, subject_cols: tuple, name: str) -> object:
+    row = pd.Series(row_dict)
+    return dash.student_subject_bar(row, list(subject_cols), name)
+
+@st.cache_data(show_spinner=False)
+def _cached_comparison_bar(comp_dict: dict, subject_cols: tuple) -> object:
+    comp_df = pd.DataFrame(comp_dict)
+    return dash.comparison_bar(comp_df, list(subject_cols))
+
+@st.cache_data(show_spinner=False)
+def _cached_comparison_radar(comp_dict: dict, subject_cols: tuple) -> object:
+    comp_df = pd.DataFrame(comp_dict)
+    return dash.comparison_radar(comp_df, list(subject_cols))
+
+@st.cache_data(show_spinner=False)
+def _cached_dept_subject_analysis(
+    df: pd.DataFrame, dept_col: str, dept_name: str,
+    subject_cols: tuple, sem_col: str | None
+) -> list:
+    return dash.dept_subject_analysis(df, dept_col, dept_name, list(subject_cols), sem_col)
+
+@st.cache_data(show_spinner=False)
+def _cached_dept_stats(df: pd.DataFrame, dept_col: str, subject_cols: tuple, attend_col) -> dict:
+    """Cache department summary stats used in the dashboard table."""
+    meta_lite = {
+        "df": df,
+        "dept_col": dept_col,
+        "subject_cols": list(subject_cols),
+        "attend_col": attend_col,
+        "name_col": None,
+        "roll_col": None,
+        "year_col": None,
+        "n_students": len(df),
+        "n_departments": df[dept_col].nunique() if dept_col else 0,
+        "has_attendance": attend_col is not None,
+    }
+    from tools import get_department_stats
+    return get_department_stats(meta_lite)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Session state initialisation
 # ─────────────────────────────────────────────────────────────────────────────
 def _init_state():
@@ -198,7 +284,7 @@ def _init_state():
         "agent": None,
         "rag": None,
         "ml_model": None,
-        "chat_history": [],   # list of (role, content)
+        "chat_history": [],
         "api_key": _get_api_key(),
         "rag_built": False,
     }
@@ -334,35 +420,52 @@ elif page == "📂 Upload & Analyze":
     )
 
     if uploaded:
-        with st.spinner("📥 Loading file…"):
-            df_raw = load_file(uploaded)
+        # ✅ file_id check — same file dobara process mat karo
+        file_id = f"{uploaded.name}_{uploaded.size}"
+        if st.session_state.get("_last_file_id") != file_id:
+            st.session_state["_last_file_id"] = file_id
 
-        if df_raw is not None:
-            with st.spinner("⚙️ Preprocessing…"):
-                meta = preprocess(df_raw)
-            st.session_state["meta"] = meta
+            with st.spinner("📥 Loading file…"):
+                df_raw = load_file(uploaded)
 
-            # Build RAG
-            with st.spinner("🧠 Building RAG index…"):
-                rag = RAGEngine(api_key=st.session_state.get("api_key"))
-                chunks = build_chunks(meta)
-                rag.build(chunks)
-                st.session_state["rag"] = rag
-                st.session_state["rag_built"] = True
+            if df_raw is not None:
+                with st.spinner("⚙️ Preprocessing…"):
+                    meta = preprocess(df_raw)
+                st.session_state["meta"] = meta
 
-            # Train ML model
-            with st.spinner("📈 Training ML model…"):
-                ml = train_model(meta)
-                st.session_state["ml_model"] = ml
+                with st.spinner("🧠 Building RAG index…"):
+                    rag = RAGEngine(api_key=st.session_state.get("api_key"))
+                    chunks = build_chunks(meta)
+                    rag.build(chunks)
+                    st.session_state["rag"] = rag
+                    st.session_state["rag_built"] = True
 
-            # Create / update agent
-            agent = UniversityAgent(api_key=st.session_state.get("api_key"))
-            agent.attach_data(meta, rag, ml)
-            st.session_state["agent"] = agent
+                with st.spinner("📈 Training ML model…"):
+                    ml = train_model(meta)
+                    st.session_state["ml_model"] = ml
+
+                agent = UniversityAgent(api_key=st.session_state.get("api_key"))
+                agent.attach_data(meta, rag, ml)
+                st.session_state["agent"] = agent
+
+                # ✅ Cache clear karein naye dataset ke liye
+                _cached_marks_bar.clear()
+                _cached_dept_pie.clear()
+                _cached_attendance_hist.clear()
+                _cached_grade_dist.clear()
+                _cached_subject_top.clear()
+                _cached_box_plot.clear()
+                _cached_dept_subject_analysis.clear()
+                _cached_dept_stats.clear()
+
+        # Display (hamesha show hoga, sirf processing skip hogi agar same file)
+        meta = st.session_state.get("meta")
+        if meta:
+            ml = st.session_state.get("ml_model")
+            chunks = st.session_state.get("rag") and getattr(st.session_state["rag"], "chunks", [])
 
             st.success(f"✅ Dataset loaded! {meta['n_students']:,} students, {len(meta['subject_cols'])} subjects detected.")
 
-            # File info
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Rows", f"{meta['n_students']:,}")
             col2.metric("Columns", len(meta["df"].columns))
@@ -371,7 +474,6 @@ elif page == "📂 Upload & Analyze":
 
             st.markdown("---")
 
-            # Detected columns
             with st.expander("🔍 Detected Column Mapping", expanded=True):
                 cols_info = {
                     "Student Name": meta.get("name_col") or "Not detected",
@@ -385,7 +487,6 @@ elif page == "📂 Upload & Analyze":
                     color = "#34d399" if "Not detected" not in str(v) and "None" not in str(v) else "#f87171"
                     st.markdown(f"**{k}:** <span style='color:{color}'>{v}</span>", unsafe_allow_html=True)
 
-            # Dept → Subject mapping preview
             dept_subject_map = meta.get("dept_subject_map", {})
             if dept_subject_map:
                 with st.expander("🗂️ Department → Subjects Mapping", expanded=False):
@@ -394,21 +495,17 @@ elif page == "📂 Upload & Analyze":
                                     f"<span style='color:#94a3b8'>{', '.join(subjects)}</span>",
                                     unsafe_allow_html=True)
 
-            # Data preview
             st.markdown("### 👀 Data Preview (first 20 rows)")
             st.dataframe(meta["df"].head(20), use_container_width=True)
 
-            # RAG status
             if st.session_state["rag_built"]:
-                st.info(f"🧠 RAG index: {len(chunks)} chunks indexed")
+                st.info(f"🧠 RAG index ready")
 
-            # ML model status
             if ml:
                 metrics = ml["metrics"]
                 st.success(f"📈 ML model trained — R²: {metrics['r2']}  MAE: {metrics['mae']}  "
                            f"Target: `{ml['target_col']}`  Features: {ml['feature_cols']}")
 
-            # Downloads
             st.markdown("---")
             st.markdown("### ⬇️ Download")
             c1, c2 = st.columns(2)
@@ -433,7 +530,6 @@ elif page == "📊 Dashboard":
     meta = st.session_state["meta"]
     st.markdown("# 📊 Analytics Dashboard")
 
-    # KPI row
     summary = get_dataset_summary(meta)
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("👥 Students", f"{summary['total_students']:,}")
@@ -446,27 +542,51 @@ elif page == "📊 Dashboard":
 
     st.markdown("---")
 
-    # Charts row 1
+    df = meta["df"]
+    scols = tuple(meta["subject_cols"])
+    dept_col = meta.get("dept_col")
+    attend_col = meta.get("attend_col")
+
+    # Charts row 1 — ✅ cached
     col1, col2 = st.columns(2)
     with col1:
-        st.plotly_chart(dash.marks_bar_chart(meta), use_container_width=True)
+        st.plotly_chart(_cached_marks_bar(df, scols), use_container_width=True)
     with col2:
-        st.plotly_chart(dash.department_pie(meta), use_container_width=True)
+        if dept_col:
+            st.plotly_chart(_cached_dept_pie(df, dept_col), use_container_width=True)
 
-    # Charts row 2
+    # Charts row 2 — ✅ cached
     col3, col4 = st.columns(2)
     with col3:
-        st.plotly_chart(dash.attendance_histogram(meta), use_container_width=True)
+        if attend_col:
+            st.plotly_chart(_cached_attendance_hist(df, attend_col), use_container_width=True)
     with col4:
-        st.plotly_chart(dash.grade_distribution(meta), use_container_width=True)
+        st.plotly_chart(_cached_grade_dist(df), use_container_width=True)
 
-    # Full-width department chart
-    st.plotly_chart(dash.dept_marks_bar(meta), use_container_width=True)
+    # ✅ NEW: Department-wise Subject Analysis (replaces dept_marks_bar)
+    st.markdown("---")
+    st.markdown("### 🏛️ Department-wise Subject Analysis")
+    if dept_col:
+        dept_list = sorted(df[dept_col].dropna().unique().tolist())
+        selected_dept = st.selectbox("Select Department", dept_list, key="dash_dept_select")
+        sem_col = meta.get("year_col")  # use year/semester col if available
 
-    # Department table
-    if meta.get("dept_col"):
+        if selected_dept:
+            analysis = _cached_dept_subject_analysis(
+                df, dept_col, selected_dept, scols, sem_col
+            )
+            for sem_label, bar_fig, pie_fig in analysis:
+                st.markdown(f"#### 📅 {sem_label}")
+                c_bar, c_pie = st.columns(2)
+                c_bar.plotly_chart(bar_fig, use_container_width=True)
+                c_pie.plotly_chart(pie_fig, use_container_width=True)
+    else:
+        st.info("No department column detected in dataset.")
+
+    # Department summary table — ✅ cached
+    if dept_col:
         st.markdown("### 🏛️ Department Summary Table")
-        dept_stats = get_department_stats(meta)
+        dept_stats = _cached_dept_stats(df, dept_col, scols, attend_col)
         if "departments" in dept_stats:
             rows = []
             for dept, info in dept_stats["departments"].items():
@@ -493,7 +613,6 @@ elif page == "📚 Subject Analysis":
 
     subject = st.selectbox("Select Subject", scols)
 
-    # Stats
     df = meta["df"]
     col = df[subject]
     c1, c2, c3, c4 = st.columns(4)
@@ -504,15 +623,14 @@ elif page == "📚 Subject Analysis":
 
     st.markdown("---")
 
-    # Top students
     name_col = meta.get("name_col")
     if name_col:
+        # ✅ cached
         st.plotly_chart(
-            dash.subject_top_students(df, subject, name_col, n=10),
+            _cached_subject_top(df, subject, name_col),
             use_container_width=True,
         )
 
-    # All subjects summary
     st.markdown("### 📊 All Subjects Summary")
     subj_data = get_subject_analysis(meta)
     if "subjects" in subj_data:
@@ -529,28 +647,13 @@ elif page == "📚 Subject Analysis":
         st.dataframe(pd.DataFrame(rows).sort_values("Average", ascending=False),
                      use_container_width=True)
 
-    # Subject distribution
     col_l, col_r = st.columns(2)
     with col_l:
-        fig = dash.marks_bar_chart(meta)
-        st.plotly_chart(fig, use_container_width=True)
+        # ✅ cached
+        st.plotly_chart(_cached_marks_bar(df, tuple(scols)), use_container_width=True)
     with col_r:
-        import plotly.express as px
-        fig2 = px.box(
-            df[scols].melt(var_name="Subject", value_name="Score"),
-            x="Subject", y="Score",
-            color="Subject",
-            title="Score Distribution (Box Plot)",
-            color_discrete_sequence=px.colors.qualitative.Bold,
-        )
-        fig2.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(family="IBM Plex Sans", color="#e2e8f0"),
-            margin=dict(l=30, r=30, t=50, b=30),
-            showlegend=False,
-            xaxis=dict(color="#94a3b8"), yaxis=dict(color="#94a3b8"),
-        )
-        st.plotly_chart(fig2, use_container_width=True)
+        # ✅ cached
+        st.plotly_chart(_cached_box_plot(df, tuple(scols)), use_container_width=True)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -595,7 +698,6 @@ elif page == "🔍 Student Search":
                 if "Grade" in row.index:
                     info_cols[i % 4].metric("Grade", str(row["Grade"]))
 
-                # ── Subject chart — SIRF is student ke department ke subjects ──
                 student_scols = get_student_subjects(meta, row)
                 if student_scols:
                     dept_name = str(row.get(meta.get("dept_col"), "")) if meta.get("dept_col") else ""
@@ -604,17 +706,18 @@ elif page == "🔍 Student Search":
                         f"📚 Showing {len(student_scols)} subjects for {dept_name} department</span>",
                         unsafe_allow_html=True,
                     )
-                    fig = dash.student_subject_bar(row, student_scols, name)
+                    # ✅ cached — row dict + tuple for hashability
+                    row_dict = {k: (float(v) if isinstance(v, (np.floating, np.integer)) else str(v))
+                                for k, v in row.items() if not str(k).startswith("_")}
+                    fig = _cached_student_bar(row_dict, tuple(student_scols), name)
                     st.plotly_chart(fig, use_container_width=True)
 
-                # Full record
                 with st.expander("📋 Full Record"):
                     record = {k: v for k, v in row.items()
                               if not str(k).startswith("_")}
                     st.json({k: (float(v) if isinstance(v, (np.floating, np.integer)) else str(v))
                              for k, v in record.items()})
 
-                # ML prediction
                 ml = st.session_state.get("ml_model")
                 if ml:
                     try:
@@ -627,7 +730,6 @@ elif page == "🔍 Student Search":
 
                 st.markdown("---")
 
-    # Download search result
     if query and not get_student_row(meta, query).empty:
         result_df = get_student_row(meta, query)
         csv_bytes = result_df.to_csv(index=False).encode()
@@ -675,19 +777,22 @@ elif page == "⚖️ Comparison":
             st.warning("Could not find data for the selected students.")
         else:
             comp_df = pd.DataFrame(rows).reset_index(drop=True)
-
-            # Use only subjects relevant to the first student's dept for comparison
             first_row = rows[0]
             compare_scols = get_student_subjects(meta, first_row)
 
-            # Bar chart
-            st.plotly_chart(dash.comparison_bar(comp_df, compare_scols), use_container_width=True)
+            # ✅ cached — convert to dict for hashability
+            comp_dict = comp_df.to_dict(orient="list")
+            st.plotly_chart(
+                _cached_comparison_bar(comp_dict, tuple(compare_scols)),
+                use_container_width=True,
+            )
 
-            # Radar chart (need ≥3 subjects)
             if len(compare_scols) >= 3:
-                st.plotly_chart(dash.comparison_radar(comp_df, compare_scols), use_container_width=True)
+                st.plotly_chart(
+                    _cached_comparison_radar(comp_dict, tuple(compare_scols)),
+                    use_container_width=True,
+                )
 
-            # Summary table
             st.markdown("### 📋 Comparison Table")
             display_cols = ["__name__"] + compare_scols
             if "Average" in comp_df.columns: display_cols.append("Average")
@@ -709,7 +814,6 @@ elif page == "🤖 AI Agent Chat":
         st.warning("⚠️ Please upload a dataset first.")
         st.stop()
 
-    # Update agent with latest API key
     if st.session_state.get("agent"):
         agent: UniversityAgent = st.session_state["agent"]
         if st.session_state.get("api_key") and agent.client is None:
@@ -727,7 +831,6 @@ elif page == "🤖 AI Agent Chat":
         )
         st.session_state["agent"] = agent
 
-    # Agent status bar
     has_key = bool(st.session_state.get("api_key"))
     status_color = "#34d399" if has_key else "#fbbf24"
     status_text = "🟢 Groq LLaMA + RAG + Tools Active" if has_key else "🟡 RAG+Tools only (add Groq API key in Streamlit secrets)"
@@ -738,7 +841,6 @@ elif page == "🤖 AI Agent Chat":
         unsafe_allow_html=True,
     )
 
-    # Chat history display
     chat_container = st.container()
     with chat_container:
         for role, content in st.session_state["chat_history"]:
@@ -755,7 +857,6 @@ elif page == "🤖 AI Agent Chat":
                     unsafe_allow_html=True,
                 )
 
-    # Suggestion chips
     suggestions = [
         "Summarise the dataset",
         "Which department has highest marks?",
@@ -769,7 +870,6 @@ elif page == "🤖 AI Agent Chat":
             st.session_state["_pending_msg"] = sug
             st.rerun()
 
-    # Input
     with st.form("chat_form", clear_on_submit=True):
         user_input = st.text_area(
             "Message",
@@ -796,7 +896,6 @@ elif page == "🤖 AI Agent Chat":
         st.session_state["chat_history"].append(("assistant", reply))
         st.rerun()
 
-    # Export chat
     if st.session_state["chat_history"]:
         chat_text = "\n\n".join(
             f"{'User' if r == 'user' else 'Agent'}: {c}"
