@@ -263,6 +263,34 @@ def _detect_semester_from_columns(subject_cols: list[str]) -> dict[str, list[str
     return dict(sorted(sem_map.items()))
 
 
+def _active_subjects_for_sem(
+    dept_df: pd.DataFrame,
+    sem_col: str,
+    sem_val: str,
+    subject_cols: list[str],
+    min_fill: float = 0.3,
+) -> list[str]:
+    """
+    Return only subjects that have real data for this dept+semester.
+    A subject is considered 'active' if at least `min_fill` fraction
+    of rows in that semester have a non-null, non-zero value.
+    This prevents 80+ global subjects appearing in every semester.
+    """
+    rows = dept_df[dept_df[sem_col].astype(str).str.strip() == str(sem_val).strip()]
+    if rows.empty:
+        return subject_cols  # fallback: show all
+    n = len(rows)
+    active = []
+    for col in subject_cols:
+        if col not in rows.columns:
+            continue
+        filled = rows[col].dropna()
+        filled = filled[filled != 0]
+        if len(filled) / n >= min_fill:
+            active.append(col)
+    return active if active else subject_cols
+
+
 def _get_dept_subjects(
     df: pd.DataFrame,
     dept_col: str,
@@ -273,19 +301,20 @@ def _get_dept_subjects(
     """
     Return { semester_label: [subject_cols] } for the chosen department.
     Priority:
-      1. Dedicated semester column in the dataframe
+      1. Dedicated semester column — filter to only subjects active in that sem
       2. Semester encoded in subject column names
       3. Fallback: all subjects under one group
     """
     dept_df = df[df[dept_col] == dept_name]
 
     if sem_col and sem_col in df.columns:
-        # Dedicated semester column — group by its unique values
         sem_groups: dict[str, list[str]] = {}
         for sem_val in sorted(dept_df[sem_col].dropna().unique()):
             label = f"Semester {sem_val}" if str(sem_val).isdigit() else str(sem_val)
-            # All subjects are taught every semester; filter rows, keep all scols
-            sem_groups[label] = subject_cols
+            # ✅ Only subjects that actually have data in THIS semester
+            active = _active_subjects_for_sem(dept_df, sem_col, str(sem_val), subject_cols)
+            if active:
+                sem_groups[label] = active
         return sem_groups if sem_groups else {"All Subjects": subject_cols}
 
     # Try to parse semester from column names
@@ -429,7 +458,7 @@ def dept_subject_analysis(
     results = []
 
     for sem_label, scols in sem_groups.items():
-        # Row filter
+        # ✅ Row filter — only this dept + this semester
         if sem_col and sem_col in df.columns and sem_label != "All Subjects":
             sem_val = sem_label.replace("Semester ", "").strip()
             rows = dept_df[dept_df[sem_col].astype(str).str.strip() == sem_val]
@@ -442,7 +471,12 @@ def dept_subject_analysis(
         if not valid_scols:
             continue
 
-        avgs = rows[valid_scols].mean().dropna().reset_index()
+        # ✅ Drop subjects with 0 or null average (not taught this semester)
+        avgs = rows[valid_scols].mean().dropna()
+        avgs = avgs[avgs > 0]
+        if avgs.empty:
+            continue
+        avgs = avgs.reset_index()
         avgs.columns = ["Subject", "Average Marks"]
 
         # ── Bar ──
