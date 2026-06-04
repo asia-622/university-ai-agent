@@ -28,38 +28,41 @@ def preprocess(df: pd.DataFrame) -> dict:
     Returns
     -------
     dict with keys:
-        df            – cleaned DataFrame
-        name_col      – str | None
-        dept_col      – str | None
-        attend_col    – str | None
-        roll_col      – str | None
-        year_col      – str | None
-        subject_cols  – list[str]
-        numeric_cols  – list[str]
-        n_students    – int
-        n_departments – int
-        departments   – list[str]
-        has_attendance – bool
-        has_subjects   – bool
+        df                   – cleaned DataFrame
+        name_col             – str | None
+        dept_col             – str | None
+        attend_col           – str | None
+        roll_col             – str | None
+        year_col             – str | None
+        subject_cols         – list[str]   (ALL subjects across all depts)
+        dept_subject_map     – dict[str, list[str]]  (dept -> its subjects)
+        numeric_cols         – list[str]
+        n_students           – int
+        n_departments        – int
+        departments          – list[str]
+        has_attendance       – bool
+        has_subjects         – bool
     """
     df = df.copy()
     df = _coerce_numeric(df)
-    df = _fill_missing(df)
 
     meta: dict = {}
 
-    # Detect semantic columns
-    for field in ("student_name", "department", "attendance", "roll_no", "year"):
-        meta[f"{field.replace('student_', '')}_col" if field != "student_name"
-             else "name_col"] = detect_column(df, field)
-    # fix naming
+    # Detect semantic columns BEFORE filling missing
+    # (so we can use original NaN pattern to find dept->subject mapping)
     meta["name_col"]   = detect_column(df, "student_name")
     meta["dept_col"]   = detect_column(df, "department")
     meta["attend_col"] = detect_column(df, "attendance")
     meta["roll_col"]   = detect_column(df, "roll_no")
     meta["year_col"]   = detect_column(df, "year")
+    meta["subject_cols"] = detect_subject_columns(df)
 
-    meta["subject_cols"]  = detect_subject_columns(df)
+    # Build department -> subjects mapping BEFORE filling NaNs
+    meta["dept_subject_map"] = _build_dept_subject_map(df, meta)
+
+    # Now fill missing values
+    df = _fill_missing(df)
+
     meta["numeric_cols"]  = list(df.select_dtypes(include=[np.number]).columns)
     meta["df"]            = df
     meta["n_students"]    = len(df)
@@ -83,6 +86,42 @@ def preprocess(df: pd.DataFrame) -> dict:
         meta["n_students"], meta["n_departments"], len(meta["subject_cols"]),
     )
     return meta
+
+
+# ── Department → Subjects mapping ─────────────────────────────────────────────
+def _build_dept_subject_map(df: pd.DataFrame, meta: dict) -> dict[str, list[str]]:
+    """
+    For each department, find which subject columns have actual (non-NaN)
+    values. This must be called BEFORE _fill_missing so NaN pattern is intact.
+
+    Strategy:
+      - Group rows by department
+      - For each subject column, check if the majority of students in that
+        department have a real (non-NaN) value
+      - If >50% students in a dept have a real value → that subject belongs
+        to that department
+    """
+    dept_col  = meta.get("dept_col")
+    scols     = meta.get("subject_cols", [])
+
+    if not dept_col or not scols or dept_col not in df.columns:
+        return {}
+
+    dept_subject_map: dict[str, list[str]] = {}
+    threshold = 0.5   # >50% students must have a real score
+
+    for dept in df[dept_col].dropna().unique():
+        dept_df   = df[df[dept_col] == dept]
+        dept_subjects = []
+        for s in scols:
+            if s in dept_df.columns:
+                non_null_ratio = dept_df[s].notna().mean()
+                if non_null_ratio > threshold:
+                    dept_subjects.append(s)
+        if dept_subjects:
+            dept_subject_map[str(dept)] = dept_subjects
+
+    return dept_subject_map
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -142,3 +181,21 @@ def get_student_row(meta: dict, name: str) -> pd.DataFrame:
         re.escape(name.lower()), na=False
     )
     return df[mask].reset_index(drop=True)
+
+
+def get_student_subjects(meta: dict, row: pd.Series) -> list[str]:
+    """
+    Return only the subjects relevant to this student's department.
+    Falls back to all subject_cols if mapping unavailable.
+    """
+    dept_col         = meta.get("dept_col")
+    dept_subject_map = meta.get("dept_subject_map", {})
+    all_scols        = meta.get("subject_cols", [])
+
+    if dept_col and dept_col in row.index:
+        dept = str(row[dept_col])
+        if dept in dept_subject_map and dept_subject_map[dept]:
+            return dept_subject_map[dept]
+
+    # Fallback — return all subjects
+    return all_scols
