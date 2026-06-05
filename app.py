@@ -175,6 +175,7 @@ from rag_engine import RAGEngine, build_chunks
 from chatbot import UniversityAgent
 from model import train_model, predict_batch
 import dashboard as dash
+import plotly.graph_objects as go
 from tools import (
     get_dataset_summary, get_department_stats,
     get_top_students, get_attendance_analysis, get_subject_analysis,
@@ -702,15 +703,17 @@ elif page == "🔍 Student Search":
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PAGE: Comparison
+# PAGE: Comparison  ✅ FIXED — cross-department support
 # ═════════════════════════════════════════════════════════════════════════════
 elif page == "⚖️ Comparison":
     _require_data()
     meta = st.session_state["meta"]
     st.markdown("# ⚖️ Student Comparison")
 
-    name_col = meta.get("name_col")
-    scols = meta["subject_cols"]
+    name_col   = meta.get("name_col")
+    scols      = meta["subject_cols"]
+    dept_col   = meta.get("dept_col")
+    attend_col = meta.get("attend_col")
 
     if name_col is None:
         st.error("❌ No student name column detected.")
@@ -741,26 +744,146 @@ elif page == "⚖️ Comparison":
             st.warning("Could not find data for the selected students.")
         else:
             comp_df = pd.DataFrame(rows).reset_index(drop=True)
-            first_row = rows[0]
-            compare_scols = get_student_subjects(meta, first_row)
 
-            comp_dict = comp_df.to_dict(orient="list")
-            st.plotly_chart(
-                _cached_comparison_bar(comp_dict, tuple(compare_scols)),
-                use_container_width=True,
-            )
+            # ── Detect departments of selected students ──────────────────────
+            student_depts = []
+            for row in rows:
+                d = str(row.get(dept_col, "Unknown")) if dept_col else "Unknown"
+                student_depts.append(d)
 
-            if len(compare_scols) >= 3:
+            same_dept = len(set(student_depts)) == 1
+
+            # ════════════════════════════════════════════════════════════════
+            # CASE A: Same department → standard shared-subject comparison
+            # ════════════════════════════════════════════════════════════════
+            if same_dept:
+                compare_scols = get_student_subjects(meta, rows[0])
+                comp_dict     = comp_df.to_dict(orient="list")
+
                 st.plotly_chart(
-                    _cached_comparison_radar(comp_dict, tuple(compare_scols)),
+                    _cached_comparison_bar(comp_dict, tuple(compare_scols)),
                     use_container_width=True,
                 )
 
+                if len(compare_scols) >= 3:
+                    st.plotly_chart(
+                        _cached_comparison_radar(comp_dict, tuple(compare_scols)),
+                        use_container_width=True,
+                    )
+
+            # ════════════════════════════════════════════════════════════════
+            # CASE B: Different departments → per-student charts + overall bar
+            # ════════════════════════════════════════════════════════════════
+            else:
+                st.info(
+                    "ℹ️ Selected students are from **different departments** — "
+                    "showing individual subject charts and an overall comparison."
+                )
+
+                # ── Per-student subject bar charts ───────────────────────────
+                st.markdown("### 📊 Individual Subject Performance")
+                for row in rows:
+                    s_name       = str(row.get("__name__", "Student"))
+                    s_dept       = str(row.get(dept_col, "")) if dept_col else ""
+                    student_scols = get_student_subjects(meta, row)
+
+                    if student_scols:
+                        st.markdown(
+                            f"**👤 {s_name}** "
+                            f"<span style='color:#94a3b8;font-size:0.85rem'>— {s_dept}</span>",
+                            unsafe_allow_html=True,
+                        )
+                        row_dict = {
+                            k: (float(v) if isinstance(v, (np.floating, np.integer)) else str(v))
+                            for k, v in row.items()
+                            if not str(k).startswith("_")
+                        }
+                        fig = _cached_student_bar(row_dict, tuple(student_scols), s_name)
+                        st.plotly_chart(fig, use_container_width=True)
+
+                # ── Overall Average + Attendance comparison ──────────────────
+                st.markdown("### ⚖️ Overall Comparison")
+
+                compare_metrics = []
+                if "Average" in comp_df.columns:
+                    compare_metrics.append("Average")
+                if attend_col and attend_col in comp_df.columns:
+                    compare_metrics.append(attend_col)
+
+                if compare_metrics:
+                    overall_fig = go.Figure()
+                    palette     = ["#38bdf8", "#818cf8", "#34d399", "#fbbf24", "#f87171"]
+
+                    for idx, metric in enumerate(compare_metrics):
+                        vals  = [float(r.get(metric, 0)) for r in rows]
+                        names = [str(r.get("__name__", "?")) for r in rows]
+                        overall_fig.add_trace(go.Bar(
+                            name=metric,
+                            x=names,
+                            y=vals,
+                            marker_color=palette[idx % len(palette)],
+                            text=[f"{v:.1f}" for v in vals],
+                            textposition="outside",
+                        ))
+
+                    overall_fig.update_layout(
+                        barmode      = "group",
+                        title        = "Overall Average & Attendance Comparison",
+                        paper_bgcolor= "rgba(0,0,0,0)",
+                        plot_bgcolor = "rgba(0,0,0,0)",
+                        font         = dict(family="IBM Plex Sans, sans-serif", color="#e2e8f0"),
+                        margin       = dict(l=30, r=30, t=50, b=30),
+                        legend       = dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#cbd5e1")),
+                        xaxis        = dict(color="#94a3b8", showgrid=False),
+                        yaxis        = dict(color="#94a3b8",
+                                            gridcolor="rgba(148,163,184,0.15)",
+                                            range=[0, 110]),
+                    )
+                    st.plotly_chart(overall_fig, use_container_width=True)
+
+                # ── Grade badges ─────────────────────────────────────────────
+                if "Grade" in comp_df.columns:
+                    st.markdown("### 🏅 Grade Summary")
+                    grade_cols = st.columns(len(rows))
+                    grade_color = {
+                        "A+": "#22d3ee", "A": "#34d399", "B": "#a3e635",
+                        "C": "#fbbf24", "D": "#fb923c", "F": "#f87171",
+                    }
+                    for gc, row in zip(grade_cols, rows):
+                        s_name = str(row.get("__name__", "Student"))
+                        s_dept = str(row.get(dept_col, "")) if dept_col else ""
+                        grade  = str(row.get("Grade", "N/A"))
+                        avg    = row.get("Average", 0)
+                        color  = grade_color.get(grade, "#94a3b8")
+                        gc.markdown(
+                            f"<div style='background:var(--surface);border:1px solid {color};"
+                            f"border-radius:12px;padding:1rem;text-align:center'>"
+                            f"<div style='font-size:2rem;font-weight:700;color:{color}'>{grade}</div>"
+                            f"<div style='font-weight:600;margin:0.3rem 0'>{s_name}</div>"
+                            f"<div style='color:#94a3b8;font-size:0.8rem'>{s_dept}</div>"
+                            f"<div style='color:#94a3b8;font-size:0.8rem'>Avg: {float(avg):.2f}</div>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+            # ── Comparison table — always show ───────────────────────────────
             st.markdown("### 📋 Comparison Table")
-            display_cols = ["__name__"] + compare_scols
-            if "Average" in comp_df.columns: display_cols.append("Average")
-            if meta.get("attend_col") and meta["attend_col"] in comp_df.columns:
-                display_cols.append(meta["attend_col"])
+
+            # Build display columns: name + each student's own subjects union + Average + Attendance
+            all_student_scols: list[str] = []
+            for row in rows:
+                for sc in get_student_subjects(meta, row):
+                    if sc not in all_student_scols:
+                        all_student_scols.append(sc)
+
+            display_cols = ["__name__"] + all_student_scols
+            if "Average"  in comp_df.columns: display_cols.append("Average")
+            if attend_col and attend_col in comp_df.columns:
+                display_cols.append(attend_col)
+            if "Grade"    in comp_df.columns: display_cols.append("Grade")
+            if dept_col   and dept_col in comp_df.columns:
+                display_cols.insert(1, dept_col)
+
             tbl = comp_df[[c for c in display_cols if c in comp_df.columns]].copy()
             tbl = tbl.rename(columns={"__name__": "Student"})
             st.dataframe(tbl, use_container_width=True)
@@ -794,9 +917,12 @@ elif page == "🤖 AI Agent Chat":
         )
         st.session_state["agent"] = agent
 
-    has_key = bool(st.session_state.get("api_key"))
+    has_key     = bool(st.session_state.get("api_key"))
     status_color = "#34d399" if has_key else "#fbbf24"
-    status_text = "🟢 Groq LLaMA + RAG + Tools Active" if has_key else "🟡 RAG+Tools only (add Groq API key in Streamlit secrets)"
+    status_text  = (
+        "🟢 Groq LLaMA + RAG + Tools Active" if has_key
+        else "🟡 RAG+Tools only (add Groq API key in Streamlit secrets)"
+    )
     st.markdown(
         f"<div style='background:rgba(30,41,59,0.8);border:1px solid #334155;"
         f"border-radius:8px;padding:0.6rem 1rem;margin-bottom:1rem;"
@@ -842,7 +968,7 @@ elif page == "🤖 AI Agent Chat":
             value=st.session_state.pop("_pending_msg", ""),
         )
         c_send, c_clear = st.columns([3, 1])
-        send = c_send.form_submit_button("📨 Send", use_container_width=True)
+        send  = c_send.form_submit_button("📨 Send",  use_container_width=True)
         clear = c_clear.form_submit_button("🗑 Clear", use_container_width=True)
 
     if clear:
