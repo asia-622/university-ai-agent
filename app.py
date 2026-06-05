@@ -191,8 +191,6 @@ def _get_api_key() -> str:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ✅ CACHED CHART BUILDERS
-# Har function sirf tab re-run hoga jab df ya columns badlenge.
-# Streamlit har page-visit par inhe dobara compute NAHI karega.
 # ─────────────────────────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False)
@@ -249,13 +247,6 @@ def _cached_comparison_bar(comp_dict: dict, subject_cols: tuple) -> object:
 def _cached_comparison_radar(comp_dict: dict, subject_cols: tuple) -> object:
     comp_df = pd.DataFrame(comp_dict)
     return dash.comparison_radar(comp_df, list(subject_cols))
-
-@st.cache_data(show_spinner=False)
-def _cached_dept_subject_analysis(
-    df: pd.DataFrame, dept_col: str, dept_name: str,
-    subject_cols: tuple, sem_col: str | None
-) -> list:
-    return dash.dept_subject_analysis(df, dept_col, dept_name, list(subject_cols), sem_col)
 
 @st.cache_data(show_spinner=False)
 def _cached_dept_stats(df: pd.DataFrame, dept_col: str, subject_cols: tuple, attend_col) -> dict:
@@ -420,7 +411,6 @@ elif page == "📂 Upload & Analyze":
     )
 
     if uploaded:
-        # ✅ file_id check — same file dobara process mat karo
         file_id = f"{uploaded.name}_{uploaded.size}"
         if st.session_state.get("_last_file_id") != file_id:
             st.session_state["_last_file_id"] = file_id
@@ -455,14 +445,11 @@ elif page == "📂 Upload & Analyze":
                 _cached_grade_dist.clear()
                 _cached_subject_top.clear()
                 _cached_box_plot.clear()
-                _cached_dept_subject_analysis.clear()
                 _cached_dept_stats.clear()
 
-        # Display (hamesha show hoga, sirf processing skip hogi agar same file)
         meta = st.session_state.get("meta")
         if meta:
             ml = st.session_state.get("ml_model")
-            chunks = st.session_state.get("rag") and getattr(st.session_state["rag"], "chunks", [])
 
             st.success(f"✅ Dataset loaded! {meta['n_students']:,} students, {len(meta['subject_cols'])} subjects detected.")
 
@@ -547,7 +534,7 @@ elif page == "📊 Dashboard":
     dept_col = meta.get("dept_col")
     attend_col = meta.get("attend_col")
 
-    # Charts row 1 — ✅ cached
+    # Charts row 1
     col1, col2 = st.columns(2)
     with col1:
         st.plotly_chart(_cached_marks_bar(df, scols), use_container_width=True)
@@ -555,7 +542,7 @@ elif page == "📊 Dashboard":
         if dept_col:
             st.plotly_chart(_cached_dept_pie(df, dept_col), use_container_width=True)
 
-    # Charts row 2 — ✅ cached
+    # Charts row 2
     col3, col4 = st.columns(2)
     with col3:
         if attend_col:
@@ -563,28 +550,9 @@ elif page == "📊 Dashboard":
     with col4:
         st.plotly_chart(_cached_grade_dist(df), use_container_width=True)
 
-    # ✅ NEW: Department-wise Subject Analysis (replaces dept_marks_bar)
-    st.markdown("---")
-    st.markdown("### 🏛️ Department-wise Subject Analysis")
+    # Department summary table
     if dept_col:
-        dept_list = sorted(df[dept_col].dropna().unique().tolist())
-        selected_dept = st.selectbox("Select Department", dept_list, key="dash_dept_select")
-        sem_col = meta.get("year_col")  # use year/semester col if available
-
-        if selected_dept:
-            analysis = _cached_dept_subject_analysis(
-                df, dept_col, selected_dept, scols, sem_col
-            )
-            for sem_label, bar_fig, pie_fig in analysis:
-                st.markdown(f"#### 📅 {sem_label}")
-                c_bar, c_pie = st.columns(2)
-                c_bar.plotly_chart(bar_fig, use_container_width=True)
-                c_pie.plotly_chart(pie_fig, use_container_width=True)
-    else:
-        st.info("No department column detected in dataset.")
-
-    # Department summary table — ✅ cached
-    if dept_col:
+        st.markdown("---")
         st.markdown("### 🏛️ Department Summary Table")
         dept_stats = _cached_dept_stats(df, dept_col, scols, attend_col)
         if "departments" in dept_stats:
@@ -625,7 +593,6 @@ elif page == "📚 Subject Analysis":
 
     name_col = meta.get("name_col")
     if name_col:
-        # ✅ cached
         st.plotly_chart(
             _cached_subject_top(df, subject, name_col),
             use_container_width=True,
@@ -649,10 +616,8 @@ elif page == "📚 Subject Analysis":
 
     col_l, col_r = st.columns(2)
     with col_l:
-        # ✅ cached
         st.plotly_chart(_cached_marks_bar(df, tuple(scols)), use_container_width=True)
     with col_r:
-        # ✅ cached
         st.plotly_chart(_cached_box_plot(df, tuple(scols)), use_container_width=True)
 
 
@@ -706,7 +671,6 @@ elif page == "🔍 Student Search":
                         f"📚 Showing {len(student_scols)} subjects for {dept_name} department</span>",
                         unsafe_allow_html=True,
                     )
-                    # ✅ cached — row dict + tuple for hashability
                     row_dict = {k: (float(v) if isinstance(v, (np.floating, np.integer)) else str(v))
                                 for k, v in row.items() if not str(k).startswith("_")}
                     fig = _cached_student_bar(row_dict, tuple(student_scols), name)
@@ -780,7 +744,6 @@ elif page == "⚖️ Comparison":
             first_row = rows[0]
             compare_scols = get_student_subjects(meta, first_row)
 
-            # ✅ cached — convert to dict for hashability
             comp_dict = comp_df.to_dict(orient="list")
             st.plotly_chart(
                 _cached_comparison_bar(comp_dict, tuple(compare_scols)),
