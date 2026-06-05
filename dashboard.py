@@ -263,32 +263,53 @@ def _detect_semester_from_columns(subject_cols: list[str]) -> dict[str, list[str
     return dict(sorted(sem_map.items()))
 
 
-def _active_subjects_for_sem(
-    dept_df: pd.DataFrame,
+def _get_dept_sem_subjects(
+    df: pd.DataFrame,
+    dept_col: str,
+    dept_name: str,
     sem_col: str,
-    sem_val: str,
     subject_cols: list[str],
-    min_fill: float = 0.3,
-) -> list[str]:
+) -> dict[str, list[str]]:
     """
-    Return only subjects that have real data for this dept+semester.
-    A subject is considered 'active' if at least `min_fill` fraction
-    of rows in that semester have a non-null, non-zero value.
-    This prevents 80+ global subjects appearing in every semester.
+    For dept+semester data: find which subjects are NEW in each semester
+    (appear in sem N but NOT in sem N-1 = first time taught).
+    Returns { "Semester 1": [cols], "Semester 2": [cols], ... }
     """
-    rows = dept_df[dept_df[sem_col].astype(str).str.strip() == str(sem_val).strip()]
-    if rows.empty:
-        return subject_cols  # fallback: show all
-    n = len(rows)
-    active = []
-    for col in subject_cols:
-        if col not in rows.columns:
-            continue
-        filled = rows[col].dropna()
-        filled = filled[filled != 0]
-        if len(filled) / n >= min_fill:
-            active.append(col)
-    return active if active else subject_cols
+    dept_df = df[df[dept_col] == dept_name]
+    semesters = sorted(dept_df[sem_col].dropna().unique())
+    sem_groups = {}
+    FILL_THRESH = 0.5  # subject must be filled in >=50% of rows to count
+
+    for sem_val in semesters:
+        label = f"Semester {int(sem_val)}"
+        curr_rows = dept_df[dept_df[sem_col] == sem_val]
+        n_curr = max(len(curr_rows), 1)
+
+        # Which subject cols are filled in this semester
+        curr_filled = set(
+            col for col in subject_cols
+            if col in curr_rows.columns
+            and curr_rows[col].dropna().shape[0] / n_curr >= FILL_THRESH
+        )
+
+        # Remove carry-over from previous semester
+        prev_sem = sem_val - 1
+        if prev_sem >= 1:
+            prev_rows = dept_df[dept_df[sem_col] == prev_sem]
+            n_prev = max(len(prev_rows), 1)
+            prev_filled = set(
+                col for col in curr_filled
+                if col in prev_rows.columns
+                and prev_rows[col].dropna().shape[0] / n_prev >= FILL_THRESH
+            )
+            new_this_sem = sorted(curr_filled - prev_filled)
+        else:
+            new_this_sem = sorted(curr_filled)
+
+        if new_this_sem:
+            sem_groups[label] = new_this_sem
+
+    return sem_groups if sem_groups else {}
 
 
 def _get_dept_subjects(
@@ -299,26 +320,13 @@ def _get_dept_subjects(
     sem_col: str | None,
 ) -> dict[str, list[str]]:
     """
-    Return { semester_label: [subject_cols] } for the chosen department.
-    Priority:
-      1. Dedicated semester column — filter to only subjects active in that sem
-      2. Semester encoded in subject column names
-      3. Fallback: all subjects under one group
+    Returns { semester_label: [subject_cols] } for the chosen department.
+    Uses sem_col if available (best accuracy), else parses column names.
     """
-    dept_df = df[df[dept_col] == dept_name]
-
     if sem_col and sem_col in df.columns:
-        sem_groups: dict[str, list[str]] = {}
-        for sem_val in sorted(dept_df[sem_col].dropna().unique()):
-            label = f"Semester {sem_val}" if str(sem_val).isdigit() else str(sem_val)
-            # ✅ Only subjects that actually have data in THIS semester
-            active = _active_subjects_for_sem(dept_df, sem_col, str(sem_val), subject_cols)
-            if active:
-                sem_groups[label] = active
-        return sem_groups if sem_groups else {"All Subjects": subject_cols}
-
-    # Try to parse semester from column names
+        return _get_dept_sem_subjects(df, dept_col, dept_name, sem_col, subject_cols)
     return _detect_semester_from_columns(subject_cols)
+
 
 
 def dept_subject_bar(
@@ -467,17 +475,25 @@ def dept_subject_analysis(
         else:
             rows = dept_df
 
-        valid_scols = [c for c in scols if c in rows.columns]
+        _non_meta = {'Roll_No','Student_Name','Department','Year','Semester',
+                     'Attendance','Average','Grade'}
+        valid_scols = [c for c in scols if c in rows.columns
+                       and c not in _non_meta
+                       and pd.api.types.is_numeric_dtype(rows[c])]
         if not valid_scols:
             continue
 
-        # ✅ Drop subjects with 0 or null average (not taught this semester)
+        # Drop subjects with 0 or null average (not taught this semester)
         avgs = rows[valid_scols].mean().dropna()
         avgs = avgs[avgs > 0]
         if avgs.empty:
             continue
         avgs = avgs.reset_index()
         avgs.columns = ["Subject", "Average Marks"]
+        # Clean display names: remove dept prefix (e.g. CS_English → English)
+        avgs["Subject"] = avgs["Subject"].apply(
+            lambda x: x.split("_", 1)[1].replace("_", " ") if "_" in x else x
+        )
 
         # ── Bar ──
         bar_fig = px.bar(
