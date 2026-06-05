@@ -946,6 +946,7 @@ elif page == "🤖 AI Agent Chat":
                     unsafe_allow_html=True,
                 )
 
+    # ── Suggestion buttons — click karo, seedha jawab aayega ─────────────────
     suggestions = [
         "Summarise the dataset",
         "Which department has highest marks?",
@@ -953,19 +954,22 @@ elif page == "🤖 AI Agent Chat":
         "Who are the top 5 students?",
         "Analyse subject performance",
     ]
-    cols = st.columns(len(suggestions))
+    sug_cols = st.columns(len(suggestions))
     for i, sug in enumerate(suggestions):
-        if cols[i].button(sug, key=f"sug_{i}"):
-            st.session_state["_pending_msg"] = sug
+        if sug_cols[i].button(sug, key=f"sug_{i}"):
+            st.session_state["chat_history"].append(("user", sug))
+            with st.spinner("🤖 Thinking…"):
+                reply = agent.chat(sug)
+            st.session_state["chat_history"].append(("assistant", reply))
             st.rerun()
 
+    # ── Manual input form ─────────────────────────────────────────────────────
     with st.form("chat_form", clear_on_submit=True):
         user_input = st.text_area(
             "Message",
             placeholder="Ask about students, departments, subjects, attendance…",
             height=80,
             label_visibility="collapsed",
-            value=st.session_state.pop("_pending_msg", ""),
         )
         c_send, c_clear = st.columns([3, 1])
         send  = c_send.form_submit_button("📨 Send",  use_container_width=True)
@@ -978,10 +982,8 @@ elif page == "🤖 AI Agent Chat":
 
     if send and user_input.strip():
         st.session_state["chat_history"].append(("user", user_input.strip()))
-
         with st.spinner("🤖 Thinking…"):
             reply = agent.chat(user_input.strip())
-
         st.session_state["chat_history"].append(("assistant", reply))
         st.rerun()
 
